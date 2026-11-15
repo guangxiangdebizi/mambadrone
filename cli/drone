@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""drone — talk to the MambaDrone phone app through the local relay.
+
+  drone status                 link + telemetry
+  drone events [since]         app log/events
+  drone <cmd> [k=v ...]        e.g. drone orbit radius=6 alt=5 photos=24 pitch=-20
+                               drone takeoff | land | rth | stop | photo | gimbal pitch=-30
+                               drone move fwd=2 right=0 up=1 yaw=0
+                               drone sim on lat=31.2 lon=121.6 | drone sim off
+                               drone download mission=<id>
+                               drone look [raw]             live FPV frame -> data/snap/look-*.jpg (raw: decode on server)
+                               drone nudge fwd=0.3 right=0 up=0 yaw=0 secs=1   (GPS-free, m/s, |v|<=0.5)
+  options: timeout=<s> (default 60; missions keep running on the phone after timeout)
+"""
+import json, os, sys, urllib.request
+
+API = os.environ.get("DRONE_API", "http://127.0.0.1:8793")
+# where relay.py stores uploads (relay.py's directory + /data)
+DATA = os.environ.get("DRONE_DATA", os.path.expanduser("~/work/drone/data"))
+
+
+def call(path, body=None):
+    req = urllib.request.Request(API + path, json.dumps(body).encode() if body is not None else None,
+                                 {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=700) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        return json.load(e)
+
+
+def num(v):
+    for t in (int, float):
+        try:
+            return t(v)
+        except ValueError:
+            pass
+    return {"true": True, "false": False}.get(v, v)
+
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"):
+    print(__doc__)
+elif a[0] == "status":
+    print(json.dumps(call("/status"), ensure_ascii=False, indent=1))
+elif a[0] == "look" and "raw" not in a[1:]:
+    r = call("/cmd", {"cmd": "look", "args": {}, "timeout": 30})
+    if not r.get("ok"):
+        sys.exit(json.dumps(r, ensure_ascii=False))
+    x = r["data"]
+    print(f"{DATA}/snap/{x['name']}  (frame {x['decode_ms']}ms, upload {x['upload_ms']}ms, {x['jpg']//1024}KB)")
+elif a[0] == "look":
+    import subprocess, time
+    r = call("/cmd", {"cmd": "vdump", "args": {}, "timeout": 30})
+    if not r.get("ok"):
+        sys.exit(json.dumps(r, ensure_ascii=False))
+    d = f"{DATA}/snap"
+    raw = open(f"{d}/{r['data']['name']}", "rb").read()
+    os.remove(f"{d}/{r['data']['name']}")
+    # the phone sends from a start point: H.264 SPS (nal type 7) or HEVC VPS (0x40)
+    i = raw.find(b"\x00\x00\x01")
+    fmt = "hevc" if i >= 0 and raw[i + 3] == 0x40 else "h264"
+    src, out = f"{d}/look.{fmt}", f"{d}/look-{time.strftime('%H%M%S')}.jpg"
+    open(src, "wb").write(raw)
+    subprocess.run(["ffmpeg", "-v", "quiet", "-flags2", "showall", "-f", fmt, "-i", src,
+                    "-q:v", "3", "-update", "1", "-y", out])
+    print(out if os.path.exists(out) else "decode failed")
+elif a[0] == "events":
+    for e in call(f"/events?since={a[1] if len(a) > 1 else 0}"):
+        print(json.dumps(e, ensure_ascii=False))
+else:
+    args, pos = {}, []
+    for x in a[1:]:
+        if "=" in x:
+            k, v = x.split("=", 1)
+            args[k] = num(v)
+        else:
+            pos.append(x)
+    if pos:
+        args["_"] = pos
+    timeout = args.pop("timeout", 60)
+    print(json.dumps(call("/cmd", {"cmd": a[0], "args": args, "timeout": timeout}), ensure_ascii=False, indent=1))

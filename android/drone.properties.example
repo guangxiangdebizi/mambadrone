@@ -1,0 +1,7 @@
+# Copy to drone.properties (git-ignored) and fill in.
+# App Key from https://developer.dji.com/user/apps (package name top.mambabot.drone)
+DJI_API_KEY=
+# Public base URL that proxies /drone/ to relay.py (port 8792)
+RELAY_URL=https://example.com
+# Same string as relay/.token on the server
+RELAY_TOKEN=

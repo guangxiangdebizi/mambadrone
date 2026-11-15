@@ -1,0 +1,10 @@
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/drone.properties
+relay/.token
+relay/data/
+relay/.venv/
+__pycache__/
+*.apk
